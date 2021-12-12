@@ -23,8 +23,8 @@ class Counter : boost::noncopyable
 
 int64_t Counter::value() const
 {
-  MutexLockGuard lock(mutex_);
-  return value_;
+  MutexLockGuard lock(mutex_);  // lock的析构会晚于返回对象的构造
+  return value_;                // 因此有效地保护了这个共享数据。
 }
 
 int64_t Counter::getAndIncrease()
