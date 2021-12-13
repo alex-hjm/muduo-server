@@ -2,9 +2,7 @@
 #include "Mutex.h"
 
 class Foo
-{
-
-};
+{ };
 
 
 class SharedPtr
@@ -46,3 +44,8 @@ class SharedPtr
       }
    }
 };
+
+int main()
+{
+   
+}
