@@ -44,18 +44,19 @@ class MutexLock : boost::noncopyable
 
   // internal usage
 
-  void lock()
+  void lock() //仅供MutexLockGuard调用，严禁用户代码调用
   {
-    pthread_mutex_lock(&mutex_);
+    pthread_mutex_lock(&mutex_);//这两行顺序不能反
     holder_ = CurrentThread::tid();
   }
 
-  void unlock()
+  void unlock()//仅供MutexLockGuard调用，严禁用户代码调用
   {
-    holder_ = 0;
+    holder_ = 0;                //这两行顺序不能反
     pthread_mutex_unlock(&mutex_);
   }
 
+  //仅供Condition调用，严禁用户代码调用
   pthread_mutex_t* getPthreadMutex() /* non-const */
   {
     return &mutex_;
@@ -63,7 +64,7 @@ class MutexLock : boost::noncopyable
 
  private:
 
-  pthread_mutex_t mutex_;
+  pthread_mutex_t mutex_;//PTHREAD_MUTEX_DEFAULT类型
   pid_t holder_;
 };
 
