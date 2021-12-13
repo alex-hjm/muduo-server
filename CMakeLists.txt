@@ -9,4 +9,4 @@ add_subdirectory(include)
 
 #src
 add_subdirectory(${SRC}/ch01)
-
+add_subdirectory(${SRC}/ch02)
