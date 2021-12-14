@@ -29,7 +29,7 @@ class Observable //:boost::noncopyable
     {
       Observer* x = observers_[i];
       if (x) {
-        x->update(); // (3)
+        x->update(); // x对象可能正在析构
       }
     }
   }
@@ -40,7 +40,7 @@ class Observable //:boost::noncopyable
 
 Observer::~Observer()
 {
-  subject_->unregister(this);
+  subject_->unregister(this);//如何得知subject_还活着
 }
 
 void Observer::observe(Observable* s)

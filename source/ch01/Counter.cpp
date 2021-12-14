@@ -17,7 +17,7 @@ class Counter : boost::noncopyable
   friend void swap(Counter& a, Counter& b);
 
  private:
-  mutable MutexLock mutex_;
+  mutable MutexLock mutex_;//const成员也能使用non-const 的mutex_
   int64_t value_;
 };
 
