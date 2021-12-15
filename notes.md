@@ -1302,6 +1302,214 @@ void AsyncLogging::threadFunc()
   // flush output
 }
 ```
+# 第6章 muduo网络库简介
+
+用Python实现了一个简单的“Hello”协议，客户端发来姓名，服务端返回问候语和服务器的当前时间:
+
+hello-server.py
+```python
+#!/usr/bin/python
+
+import socket, time
+
+serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+serversocket.bind(('', 8888))
+serversocket.listen(5)
+
+while True:
+(clientsocket, address) = serversocket.accept() # 等待客户端连接
+data = clientsocket.recv(4096) # 接收姓名
+datetime = time.asctime()+'\n'
+clientsocket.send('Hello ' + data) # 发回问候
+clientsocket.send('My time is ' + datetime) # 发送服务器当前时间
+clientsocket.close() # 关闭连接
+```
+hello-client.py
+```python
+# 省略import 等
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect((sys.argv[1], 8888)) # 服务器地址由命令行指定
+sock.send(os.getlogin() + '\n') # 发送姓名
+message = sock.recv(4096) # 接收响应
+print message # 打印结果
+sock.close() # 关闭连接
+```
+在同一台机器上运行上面的服务端和客户端:
+```shell
+$ ./hello-client.py localhost
+Hello schen
+My time is Sun May 13 12:56:44 2012
+```
+但是连接同一局域网的另外一台服务器时，收到的数据是不完整的:
+```shell
+$ ./hello-client.py atom
+Hello schen
+```
+原因是高级语言（Java、Python 等）的Sockets 库并没有对Sockets API 提供更高层的封装，直接用它编写网络程序很容易掉到陷阱里。
+
+## 6.1 muduo库
+
+**目录结构**
+
+![](images\9.jpg)
+
+**基础库**
+
+![](images\10.jpg)
+
+**网络核心库**    
+
+muduo 是基于Reactor 模式的网络库，其核心是个事件循环EventLoop，用于响应计时器和IO 事件。muduo 采用基于对象（object-based）而非面向对象（objectoriented）的设计风格，其事件回调接口多以boost::function + boost::bind 表达，用户在使用muduo 的时候不需要继承其中的class。
+
+灰底表示用户不可见的内部类。
+
+![](images\11.jpg)
+
+**网络附属库**     
+在使用的时候需要链接相应的库，例如-lmuduo_http、-lmuduo_inspect 等等。HttpServer 和Inspector 暴露出一个
+http 界面，用于监控进程的状态。
+
+![](images\12.jpg)
+
+**代码结构**
+
+头文件明确分为客户可见和客户不可见两类
+
+![](images\13.jpg)
+
+对于使用muduo 库而言，只需要掌握5 个关键类：Buffer、
+EventLoop、TcpConnection、TcpClient、TcpServer。
+
+网络核心库的头文件包含关系，用户可见的为白底，用户不
+可见的为灰底。
+
+![](images\14.jpg)
+
+**公开接口**
+- Buffer ：数据的读写通过buffer 进行。用户代码不需要调用read(2)/write(2)，只需要处理收到的数据和准备好要发送的数据。
+- InetAddress：封装IPv4 地址（end point），注意，它不能解析域名，只认IP 地址。因为直接用gethostbyname(3) 解析域名会阻塞IO 线程。
+- EventLoop：事件循环（反应器Reactor），每个线程只能有一个EventLoop 实体，它负责IO 和定时器事件的分派。它用eventfd(2) 来异步唤醒，这有别于传统的用一对pipe(2) 的办法。它用TimerQueue 作为计时器管理，用Poller 作为IO multiplexing。
+- EventLoopThread：启动一个线程，在其中运行EventLoop::loop()。
+- TcpConnection：整个网络库的核心，封装一次TCP 连接，注意它不能发起连接。
+- TcpClient：用于编写网络客户端，能发起连接，并且有重试功能。
+- TcpServer：用于编写网络服务器，接受客户的连接。
+
+> 在这些类中，TcpConnection 的生命期依靠shared_ptr 管理（即用户和库共同控制）。Buffer 的生命期由TcpConnection 控制。其余类的生命期由用户控制。Buffer和InetAddress 具有值语义，可以拷贝；其他class 都是对象语义，不可以拷贝。
+
+**内部实现**
+
+![](images\15.jpg)
+
+- Channel 是selectable IO channel，负责注册与响应IO事件，注意它不拥有filedescriptor。它是Acceptor、Connector、EventLoop、TimerQueue、TcpConnection的成员，生命期由后者控制。
+- Socket 是一个RAII handle，封装一个file descriptor，并在析构时关闭fd。它是Acceptor、TcpConnection 的成员，生命期由后者控制。EventLoop、TimerQueue也拥有fd，但是不封装为Socket class。
+- SocketsOps 封装各种Sockets 系统调用。
+- Poller 是PollPoller 和EPollPoller 的基类，采用“电平触发”的语意。它是EventLoop 的成员，生命期由后者控制。
+- PollPoller 和EPollPoller 封装poll(2) 和epoll(4) 两种IO multiplexing 后端。poll 的存在价值是便于调试，因为poll(2) 调用是上下文无关的，用strace(1) 很容易知道库的行为是否正确。
+- Connector 用于发起TCP 连接，它是TcpClient 的成员，生命期由后者控制。
+- Acceptor 用于接受TCP 连接，它是TcpServer 的成员，生命期由后者控制。
+- TimerQueue 用timerfd 实现定时，这有别于传统的设置poll/epoll_wait 的等待时长的办法。TimerQueue 用std::map 来管理Timer，常用操作的复杂度是O(logN)，N 为定时器数目。它是EventLoop 的成员，生命期由后者控制。
+- EventLoopThreadPool 用于创建IO 线程池，用于把TcpConnection 分派到某个EventLoop 线程上。它是TcpServer 的成员，生命期由后者控制。
+
+**例子**
+
+![](images\16.jpg)
+![](images\17.jpg)
+
+**线程模型**
+
+muduo 的线程模型符合one loop per thread + thread pool 模型。每个线程最多有一个EventLoop，每个TcpConnection 必须归某个EventLoop 管理，所有的IO会转移到这个线程。
+
+一个file descriptor 只能由一个线程读写。TcpConnection 所在的线程由其所属的EventLoop 决定，这样可以很方便地把不同的TCP 连接放到不同的线程去，也可以把一些TCP 连接放到一个线程里。TcpConnection 和EventLoop 是线程安全的，可以跨线程调用。
+
+TcpServer 直接支持多线程，它有两种模式：
+- 单线程，accept(2) 与TcpConnection 用同一个线程做IO。
+- 多线程，accept(2) 与EventLoop 在同一个线程，另外创建一个EventLoop-ThreadPool，新到的连接会按round-robin 方式分配到线程池中。
+
+## 6.2 使用教程
+
+muduo 只支持Linux 2.6.x 下的并发非阻塞TCP 网络编程，它的核心是每个IO线程一个事件循环，把IO 事件分发到回调函数上。
+
+**思路**
+
+- 注册一个收数据的回调函数，网络库收到数据会调用该函数，直接把数据提供给该函数，供该函数使用。
+- 注册一个接受连接的回调函数，网络库接受了新连接会回调该函数，直接把新的连接对象传给该函数，供该函数使用。
+- 需要发送数据的时候，只管往连接中写，网络库会负责无阻塞地发
+送。
+- 事件处理函数也应该避免阻塞，否则会让网络服务失去响应。
+
+**TCP 网络编程最本质的三个半事件:**   
+1. 连接的建立，包括服务端接受（accept）新连接和客户端成功发起（connect）连接。TCP 连接一旦建立，客户端和服务端是平等的，可以各自收发数据。
+2. 连接的断开，包括主动断开（close、shutdown）和被动断开（read(2) 返回0）。
+3. 消息到达，文件描述符可读。这是最为重要的一个事件，对它的处理方式决定了网络编程的风格（阻塞还是非阻塞，如何处理分包，应用层的缓冲如何设计，等等）。   
+4. 消息发送完毕，这算半个。对于低流量的服务，可以不必关心这个事件；另外，这里的“发送完毕”是指将数据写入操作系统的缓冲区，将由TCP 协议栈负责数据的发送与重传，不代表对方已经收到数据。
+
+muduo 的使用非常简单，不需要从指定的类派生，也不用覆写虚函数，只需要注册几个回调函数去处理前面提到的三个半事件就行了。
+
+**echo 回显服务的实现: [代码]()**
+
+1. 定义EchoServer class，不需要派生自任何基类。
+``` c++
+#include "muduo/net/TcpServer.h"
+
+// RFC 862
+class EchoServer
+{
+ public:
+  EchoServer(muduo::net::EventLoop* loop,
+             const muduo::net::InetAddress& listenAddr);
+
+  void start();  // calls server_.start();
+
+ private:
+  void onConnection(const muduo::net::TcpConnectionPtr& conn);
+
+  void onMessage(const muduo::net::TcpConnectionPtr& conn,
+                 muduo::net::Buffer* buf,
+                 muduo::Timestamp time);
+
+  muduo::net::TcpServer server_;
+};
+```
+在构造函数里注册回调函数。
+```c++
+EchoServer::EchoServer(muduo::net::EventLoop* loop,
+                       const muduo::net::InetAddress& listenAddr)
+  : server_(loop, listenAddr, "EchoServer")
+{
+  //基于事件编程
+  server_.setConnectionCallback(//注册的事件处理函数
+      std::bind(&EchoServer::onConnection, this, _1));
+  server_.setMessageCallback(
+      std::bind(&EchoServer::onMessage, this, _1, _2, _3));
+}
+```
+2. 实现EchoServer::onConnection() 和EchoServer::onMessage()。
+```c++
+void EchoServer::start()
+{
+  server_.start();
+}
+
+void EchoServer::onConnection(const muduo::net::TcpConnectionPtr& conn)
+{
+  LOG_INFO << "EchoServer - " << conn->peerAddress().toIpPort() << " -> "
+           << conn->localAddress().toIpPort() << " is "
+           << (conn->connected() ? "UP" : "DOWN");
+}
+
+void EchoServer::onMessage(const muduo::net::TcpConnectionPtr& conn,
+                           muduo::net::Buffer* buf,
+                           muduo::Timestamp time)
+{
+  muduo::string msg(buf->retrieveAllAsString());
+  LOG_INFO << conn->name() << " echo " << msg.size() << " bytes, "
+           << "data received at " << time.toString();
+  conn->send(msg);//把收到的数据原封不动地发回客户端。
+}
+```
+
+
+
 
 
 
