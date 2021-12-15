@@ -1302,7 +1302,7 @@ void AsyncLogging::threadFunc()
   // flush output
 }
 ```
-# 第6章 muduo网络库简介
+# 第六章 muduo网络库简介
 
 用Python实现了一个简单的“Hello”协议，客户端发来姓名，服务端返回问候语和服务器的当前时间:
 
@@ -1492,14 +1492,14 @@ void EchoServer::start()
 
 void EchoServer::onConnection(const muduo::net::TcpConnectionPtr& conn)
 {
-  LOG_INFO << "EchoServer - " << conn->peerAddress().toIpPort() << " -> "
-           << conn->localAddress().toIpPort() << " is "
+  LOG_INFO << "EchoServer - " << conn->peerAddress().toIpPort() << " -> "//对方地址
+           << conn->localAddress().toIpPort() << " is "//本地地址
            << (conn->connected() ? "UP" : "DOWN");
 }
 
 void EchoServer::onMessage(const muduo::net::TcpConnectionPtr& conn,
-                           muduo::net::Buffer* buf,
-                           muduo::Timestamp time)
+                           muduo::net::Buffer* buf,//收到的数据
+                           muduo::Timestamp time)//收到数据的确切时间
 {
   muduo::string msg(buf->retrieveAllAsString());
   LOG_INFO << conn->name() << " echo " << msg.size() << " bytes, "
@@ -1507,10 +1507,441 @@ void EchoServer::onMessage(const muduo::net::TcpConnectionPtr& conn,
   conn->send(msg);//把收到的数据原封不动地发回客户端。
 }
 ```
+**七步实现finger 服务**
 
+**1. 拒绝连接。** 什么都不做，程序空等。
+```c++
+#include "EventLoop.h"
 
+using namespace muduo;
+using namespace muduo::net;
 
+int main()
+{
+  EventLoop loop;
+  loop.loop();
+}
+```
+**2. 接受新连接。** 在1079 端口侦听新连接，接受连接之后什么都不做，程序空等。muduo 会自动丢弃收到的数据。
+```c++
+int main()
+{
+  EventLoop loop;
+  TcpServer server(&loop, InetAddress(1079), "Finger");
+  server.start();
+  loop.loop();
+}
+```
+**3. 主动断开连接。** 接受新连接之后主动断开。以下省略头文件和namespace。
 
+```c++
+void onConnection(const TcpConnectionPtr& conn)
+{
+  if (conn->connected())
+  {
+    conn->shutdown();
+  }
+}
+
+int main()
+{
+  EventLoop loop;
+  TcpServer server(&loop, InetAddress(1079), "Finger");
+  server.setConnectionCallback(onConnection);
+  server.start();
+  loop.loop();
+}
+```
+**4. 读取用户名，然后断开连接。** 如果读到一行以\r\n 结尾的消息，就断开连接。注意这段代码有安全问题，如果恶意客户端不断发送数据而不换行，会撑爆服务端的内存。另外，Buffer::findCRLF() 是线性查找，如果客户端每次发一个字节，服务端的时间复杂度为O(N2)，会消耗CPU 资源。
+```c++
+void onMessage(const TcpConnectionPtr& conn,
+               Buffer* buf,
+               Timestamp receiveTime)
+{
+  if (buf->findCRLF())//线性查找
+  {
+    conn->shutdown();
+  }
+}
+
+int main()
+{
+  EventLoop loop;
+  TcpServer server(&loop, InetAddress(1079), "Finger");
+  server.setMessageCallback(onMessage);
+  server.start();
+  loop.loop();
+}
+```
+**5. 读取用户名、输出错误信息，然后断开连接。** 如果读到一行以\r\n 结尾的消息，就发送一条出错信息，然后断开连接。安全问题同上。
+```c++
+void onMessage(const TcpConnectionPtr& conn,
+               Buffer* buf,
+               Timestamp receiveTime)
+{
+  if (buf->findCRLF())
+  {
+    conn->send("No such user\r\n");
+    conn->shutdown();
+  }
+}
+
+int main()
+{
+  EventLoop loop;
+  TcpServer server(&loop, InetAddress(1079), "Finger");
+  server.setMessageCallback(onMessage);
+  server.start();
+  loop.loop();
+}
+```
+**6. 从空的UserMap 里查找用户。** 从一行消息中拿到用户名（L30），在UserMap里查找，然后返回结果。安全问题同上。
+```c++
+typedef std::map<string, string> UserMap;
+UserMap users;
+
+string getUser(const string& user)
+{
+  string result = "No such user";
+  UserMap::iterator it = users.find(user);
+  if (it != users.end())
+  {
+    result = it->second;
+  }
+  return result;
+}
+
+void onMessage(const TcpConnectionPtr& conn,
+               Buffer* buf,
+               Timestamp receiveTime)
+{
+  const char* crlf = buf->findCRLF();
+  if (crlf)
+  {
+    string user(buf->peek(), crlf);
+    conn->send(getUser(user) + "\r\n");
+    buf->retrieveUntil(crlf + 2);
+    conn->shutdown();
+  }
+}
+
+int main()
+{
+  EventLoop loop;
+  TcpServer server(&loop, InetAddress(1079), "Finger");
+  server.setMessageCallback(onMessage);
+  server.start();
+  loop.loop();
+}
+```
+**7. 往UserMap 里添加一个用户。** 
+```c++
+typedef std::map<string, string> UserMap;
+UserMap users;
+
+string getUser(const string& user)
+{
+  string result = "No such user";
+  UserMap::iterator it = users.find(user);
+  if (it != users.end())
+  {
+    result = it->second;
+  }
+  return result;
+}
+
+void onMessage(const TcpConnectionPtr& conn,
+               Buffer* buf,
+               Timestamp receiveTime)
+{
+  const char* crlf = buf->findCRLF();
+  if (crlf)
+  {
+    string user(buf->peek(), crlf);
+    conn->send(getUser(user) + "\r\n");
+    buf->retrieveUntil(crlf + 2);
+    conn->shutdown();
+  }
+}
+
+int main()
+{
+  users["schen"] = "Happy and well";
+  EventLoop loop;
+  TcpServer server(&loop, InetAddress(1079), "Finger");
+  server.setMessageCallback(onMessage);
+  server.start();
+  loop.loop();
+}
+```
+## 6.3 详解muduo 多线程模型
+
+### 数独求解服务器
+写一个求解数独的程序（Sudoku Solver），并把它做成一个网络服务：从网络连接读入一个Sudoku 题目，算出答案，再发回给客户。
+
+**协议**      
+一个简单的以\r\n 分隔的文本行协议，使用TCP 长连接，客户端在不需要服务时主动断开连接。     
+请求：[id:]<81digits>\r\n     
+响应：[id:]<81digits>\r\n     
+或者：[id:]NoSolution\r\n
+> 其中[id:] 表示可选的id，用于区分先后的请求; <81digits> 是Sudoku 的棋盘，9x9个数字，从左上角到右下角按行扫描，未知数字以0 表示。如果Sudoku 有解，那么响应是填满数字的棋盘；如果无解，则返回NoSolution。    
+例子1:     
+请求：    
+000000010400000000020000000000050407008000300001090000300400200050100000000806000\r\n   
+响应：    
+693784512487512936125963874932651487568247391741398625319475268856129743274836159\r\n   
+
+**基本实现**
+假设已经有一个函数能求解Sudoku，它的原型如下：
+```c++
+string solveSudoku(const string& puzzle);
+```
+以[EchoServer]()为蓝本，稍加修改就能得到[SudokuServer]()。onMessage() 的主要功能是处理协议格式，并调用solveSudoku() 求解问题。
+```c++
+const int kCells = 81;
+
+void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp)
+  {
+    LOG_DEBUG << conn->name();
+    size_t len = buf->readableBytes();
+    while (len >= kCells + 2)// 反复读取数据，2 为回车换行字符
+    {
+      const char* crlf = buf->findCRLF();
+      if (crlf)// 如果找到了一条完整的请求
+      {
+        string request(buf->peek(), crlf);// 取出请求
+        buf->retrieveUntil(crlf + 2);// retrieve 已读取的数据
+        len = buf->readableBytes();
+        if (!processRequest(conn, request))// 处理请求
+        {
+          conn->send("Bad Request!\r\n");// 非法请求，断开连接
+          conn->shutdown();
+          break;
+        }
+      }
+      else if (len > 100) // id + ":" + kCells + "\r\n"
+      {
+        conn->send("Id too long!\r\n");// 请求过长，退出消息处理函数
+        conn->shutdown();
+        break;
+      }
+      else
+      {
+        break;
+      }
+    }
+  }
+  ```
+### 常见的并发网络服务程序设计方案
+
+![](images/18.jpg)
+
+方案5 也是目前用得很多的单线程Reactor 方案，muduo 对此提供了很好的支持。方案6 和方案7 其实不是实用的方案，只是作为过渡品。方案8 和方案9 是本文重点介绍的方案
+
+**方案0**   
+这其实不是并发服务器，而是iterative 服务器，因为它一次只能服务一个客户。
+```python
+ 3 import socket
+4
+5 def handle(client_socket, client_address):
+6 while True:
+7 data = client_socket.recv(4096)
+8 if data:
+9 sent = client_socket.send(data) # sendall?
+10 else:
+11 print "disconnect", client_address
+12 client_socket.close()
+13 break
+14
+15 if __name__ == "__main__":
+16 listen_address = ("0.0.0.0", 2007)
+17 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+18 server_socket.bind(listen_address)
+19 server_socket.listen(5)
+20
+21 while True:#一次只能服务一个客户连接。
+22 (client_socket, client_address) = server_socket.accept()
+23 print "got connection from", client_address
+24 handle(client_socket, client_address)
+```
+**方案1**     
+这是传统的Unix 并发网络编程方案，[UNP] 称之为child-per-client 或fork()-per-client，另外也俗称process-per-connection。这种方案适合“计算响应的工作量远大于fork() 的开销”这种情况，比如数据库服务器。这种方案适合长连接，但不太适合短连接。
+```python
+1 #!/usr/bin/python
+2
+3 from SocketServer import BaseRequestHandler, TCPServer
+4 from SocketServer import ForkingTCPServer, ThreadingTCPServer
+5
+6 class EchoHandler(BaseRequestHandler):
+7 def handle(self):
+8 print "got connection from", self.client_address
+9 while True:
+10 data = self.request.recv(4096)
+11 if data:
+12 sent = self.request.send(data) # sendall?
+13 else:
+14 print "disconnect", self.client_address
+15 self.request.close()
+16 break
+17
+18 if __name__ == "__main__":
+19 listen_address = ("0.0.0.0", 2007)
+20 server = ForkingTCPServer(listen_address, EchoHandler)
+21 server.serve_forever()
+```
+**方案2**     
+这是传统的Java 网络编程方案thread-per-connection，它的初始化开销比方案1 要小很多，但与求解Sudoku 的用时差不多，仍然不适合短连接服务。这种方案的伸缩性受到线程数的限制，一两百个还行，几千个的话对操作系统的调度恐怕是个不小的负担。
+```python
+1 #!/usr/bin/python
+2
+3 from SocketServer import BaseRequestHandler, TCPServer
+4 from SocketServer import ForkingTCPServer, ThreadingTCPServer
+5
+6 class EchoHandler(BaseRequestHandler):
+7 def handle(self):
+8 print "got connection from", self.client_address
+9 while True:
+10 data = self.request.recv(4096)
+11 if data:
+12 sent = self.request.send(data) # sendall?
+13 else:
+14 print "disconnect", self.client_address
+15 self.request.close()
+16 break
+17
+18 if __name__ == "__main__":
+19 listen_address = ("0.0.0.0", 2007)
+20 server = ThreadingTCPServer(listen_address, EchoHandler)#对每个客户连接新建一个线程
+21 server.serve_forever()
+```
+**方案3**     
+这是针对方案1 的优化，[UNP] 详细分析了几种变化，包括对accept(2)“惊群”问题（thundering herd）的考虑。
+
+**方案4**     
+这是对方案2 的优化，[UNP] 详细分析了它的几种变化。方案3 和方案4 这两个方案都是Apache httpd 长期使用的方案。
+
+------
+以上几种方案都是阻塞式网络编程，程序流程（thread of control）通常阻塞在read() 上，等待数据到达。
+
+当一个线程/进程阻塞在read() 上，但程序又想给这个TCP 连接发数据，那该怎么办？
+> - 一种方法是用两个线程/进程，一个负责读，一个负责写。
+> - 另一种方法是使用IO multiplexing，也就是select/poll/epoll/kqueue 这一系列的“多路选择器”，让一个thread of control 能处理多个连接。“IO 复用”其实复用的不是IO 连接，而是复用线程。使用select/poll 几乎肯定要配合non-blockingIO，而使用non-blocking IO 肯定要使用应用层buffer。
+
+用一小段Python 代码简要地回顾“以IO multiplexing 方式实现并发echo server”的基本做法。为了简单起见，以下代码并没有开启non-blocking，也没有考虑数据发送不完整（L28）等情况。
+```python
+6 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+7 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+8 server_socket.bind(('', 2007))
+9 server_socket.listen(5)
+10 # server_socket.setblocking(0)
+11 poll = select.poll() # epoll() should work the same
+12 poll.register(server_socket.fileno(), select.POLLIN)
+13
+14 connections = {}#定义一个从文件描述符到socket 对象的映射
+15 while True:
+16      events = poll.poll(10000) # 10 seconds
+17      for fileno, event in events:# 针对不同的文件描述符（fileno）执行不同的操作
+18          if fileno == server_socket.fileno():# 注册新连接
+19             (client_socket, client_address) = server_socket.accept()
+20             print "got connection from", client_address
+21             # client_socket.setblocking(0)
+22             poll.register(client_socket.fileno(), select.POLLIN)
+23             connections[client_socket.fileno()] = client_socket# 把连接添加到字典
+24          elif event & select.POLLIN:# 对于客户连接
+25              client_socket = connections[fileno]
+26              data = client_socket.recv(4096)
+27             if data:
+28                client_socket.send(data) # sendall() partial? 读取并回显数据
+29              else:
+30                poll.unregister(fileno)
+31                client_socket.close() 
+32                del connections[fileno]
+```
+这个代码骨架可用于实现多种TCP 服务器。例如写一个聊天服务只需改动3 行代码:
+```python
+26             if data:
+27 -              client_socket.send(data) 
+28 +              for (fd, othersocket) in connections.iteritems():
+29 +                  if othersocket != clientsocket:
+30 +                      othersocket.send(data) # sendall() partial?
+31             else:
+32                poll.unregister(fileno)
+33                clientsocket.close()
+34                del connections[fileno]
+```
+业务逻辑隐藏在一个大循环中的做法其实不利于将来功能的扩展，应设法把业务逻辑抽取出来，与网络基础代码分离。用户只需要填上关键的业务逻辑代码，并将回调注册到框架中，就可以实现完整的网络服务，这正是Reactor 模式的主要思想。
+
+Reactor 的意义在于将消息（IO 事件）分发到用户提供的处理函数，并保持网络部分的通用代码不变，独立于用户的业务逻辑。
+
+![](images/19.jpg)
+
+单线程Reactor 的程序执行顺序如图（左图）所示：
+
+在没有事件的时候，线程等待在select/poll/epoll_wait 等函数上。事件到达后由网络库处理IO，再把消息通知（回调）客户端代码。Reactor 事件循环所在的线程通常叫IO 线程。通常由网络库负责读写socket，用户代码负载解码、计算、编码。
+
+在这种协作式多任务中，事件的优先级得不到保证，因为从“poll 返回之后”到“下一次调用poll 进入等待之前”这段时间内，线程不会被其他连接上的数据或事件抢占（右图）。
+
+**方案5**
+
+基本的单线程Reactor 方案，即前面的[server_basic.cc]() 程序。
+- 优点： 由网络库搞定数据收发，程序只关心业务逻辑
+- 缺点： 适合IO 密集的应用，不太适合CPU 密集的应用，因为较难发挥多核的威力。
+> 另外，与方案2 相比，方案5 处理网络消息的延迟可能要略大一些，因为方案2 直接一次read(2) 系统调用就能拿到请求数据，而方案5 要先poll(2) 再read(2)，多了一次系统调用。
+
+用一小段Python 代码展示Reactor 模式的雏形:
+```python
+6 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+7 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+8 server_socket.bind(('', 2007))
+9 server_socket.listen(5)
+10 # serversocket.setblocking(0)
+11
+12 poll = select.poll() # epoll() should work the same
+13 connections = {}
+14 handlers = {}
+15
+16 def handle_input(socket, data):
+17    socket.send(data) # sendall() partial?
+18
+19 def handle_request(fileno, event):
+20    if event & select.POLLIN:
+21        client_socket = connections[fileno]
+22        data = client_socket.recv(4096)
+23        if data:
+24            handle_input(client_socket, data)
+25        else:
+26            poll.unregister(fileno)
+27            client_socket.close()
+28            del connections[fileno]
+29            del handlers[fileno]
+30
+31 def handle_accept(fileno, event):
+32      (client_socket, client_address) = server_socket.accept()
+33      print "got connection from", client_address
+34      # client_socket.setblocking(0)
+35      poll.register(client_socket.fileno(), select.POLLIN)
+36      connections[client_socket.fileno()] = client_socket
+37      handlers[client_socket.fileno()] = handle_request
+38
+39 poll.register(server_socket.fileno(), select.POLLIN)
+40 handlers[server_socket.fileno()] = handle_accept
+41
+42 while True:
+43    events = poll.poll(10000) # 10 seconds
+44    for fileno, event in events:
+45        handler = handlers[fileno]
+46        handler(fileno, event)
+```
+如果要改成聊天服务，重新定义handle_input 函数即可，程序的其余部分保持不变。
+```python
+$ diff echo-reactor.py chat-reactor.py -U1
+def handle_input(socket, data):
+-   socket.send(data) # sendall() partial?
++   for (fd, other_socket) in connections.iteritems():
++       if other_socket != socket:
++           other_socket.send(data) # sendall() partial?
+```
+注意在使用非阻塞IO ＋事件驱动方式编程的时候，一定要注意避免在事件回调中执行耗时的操作，包括阻塞IO 等，否则会影响程序的响应。
 
 
 
