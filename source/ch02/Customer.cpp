@@ -69,7 +69,7 @@ void CustomerData::update(const string& customer, const EntryList& entries)
 //函数原型有变，此时网络上传来的是完整的Map数据
 void CustomerData::update(const string& message)
 {
-  ///解析新数据，在临界区之外
+  //解析新数据，在临界区之外
   MapPtr newData = parseData(message);
   if (newData)
   {
