@@ -1,11 +1,11 @@
-#include "examples/sudoku/sudoku.h"
+#include "sudoku.h"
 
-#include "muduo/base/Atomic.h"
-#include "muduo/base/Logging.h"
-#include "muduo/base/Thread.h"
-#include "muduo/net/EventLoop.h"
-#include "muduo/net/InetAddress.h"
-#include "muduo/net/TcpServer.h"
+#include "Atomic.h"
+#include "Logging.h"
+#include "Thread.h"
+#include "EventLoop.h"
+#include "InetAddress.h"
+#include "TcpServer.h"
 
 #include <utility>
 
@@ -18,18 +18,21 @@ using namespace muduo::net;
 class SudokuServer
 {
  public:
-  SudokuServer(EventLoop* loop, const InetAddress& listenAddr)
+  SudokuServer(EventLoop* loop, const InetAddress& listenAddr, int numThreads)
     : server_(loop, listenAddr, "SudokuServer"),
+      numThreads_(numThreads),
       startTime_(Timestamp::now())
   {
     server_.setConnectionCallback(
         std::bind(&SudokuServer::onConnection, this, _1));
     server_.setMessageCallback(
         std::bind(&SudokuServer::onMessage, this, _1, _2, _3));
+    server_.setThreadNum(numThreads);
   }
 
   void start()
   {
+    LOG_INFO << "starting " << numThreads_ << " threads.";
     server_.start();
   }
 
@@ -111,15 +114,21 @@ class SudokuServer
   }
 
   TcpServer server_;
+  int numThreads_;
   Timestamp startTime_;
 };
 
 int main(int argc, char* argv[])
 {
   LOG_INFO << "pid = " << getpid() << ", tid = " << CurrentThread::tid();
+  int numThreads = 0;
+  if (argc > 1)
+  {
+    numThreads = atoi(argv[1]);
+  }
   EventLoop loop;
   InetAddress listenAddr(9981);
-  SudokuServer server(&loop, listenAddr);
+  SudokuServer server(&loop, listenAddr, numThreads);
 
   server.start();
 

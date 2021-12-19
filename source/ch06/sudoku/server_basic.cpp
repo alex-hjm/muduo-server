@@ -1,11 +1,11 @@
-#include "examples/sudoku/sudoku.h"
+#include "sudoku.h"
 
-#include "muduo/base/Atomic.h"
-#include "muduo/base/Logging.h"
-#include "muduo/base/Thread.h"
-#include "muduo/net/EventLoop.h"
-#include "muduo/net/InetAddress.h"
-#include "muduo/net/TcpServer.h"
+#include "Atomic.h"
+#include "Logging.h"
+#include "Thread.h"
+#include "EventLoop.h"
+#include "InetAddress.h"
+#include "TcpServer.h"
 
 #include <utility>
 
@@ -18,21 +18,18 @@ using namespace muduo::net;
 class SudokuServer
 {
  public:
-  SudokuServer(EventLoop* loop, const InetAddress& listenAddr, int numThreads)
+  SudokuServer(EventLoop* loop, const InetAddress& listenAddr)
     : server_(loop, listenAddr, "SudokuServer"),
-      numThreads_(numThreads),
       startTime_(Timestamp::now())
   {
     server_.setConnectionCallback(
         std::bind(&SudokuServer::onConnection, this, _1));
     server_.setMessageCallback(
         std::bind(&SudokuServer::onMessage, this, _1, _2, _3));
-    server_.setThreadNum(numThreads);
   }
 
   void start()
   {
-    LOG_INFO << "starting " << numThreads_ << " threads.";
     server_.start();
   }
 
@@ -48,24 +45,24 @@ class SudokuServer
   {
     LOG_DEBUG << conn->name();
     size_t len = buf->readableBytes();
-    while (len >= kCells + 2)
+    while (len >= kCells + 2)// 反复读取数据，2 为回车换行字符
     {
       const char* crlf = buf->findCRLF();
-      if (crlf)
+      if (crlf)// 如果找到了一条完整的请求
       {
-        string request(buf->peek(), crlf);
-        buf->retrieveUntil(crlf + 2);
+        string request(buf->peek(), crlf);// 取出请求
+        buf->retrieveUntil(crlf + 2);// retrieve 已读取的数据
         len = buf->readableBytes();
-        if (!processRequest(conn, request))
+        if (!processRequest(conn, request))// 处理请求
         {
-          conn->send("Bad Request!\r\n");
+          conn->send("Bad Request!\r\n");// 非法请求，断开连接
           conn->shutdown();
           break;
         }
       }
       else if (len > 100) // id + ":" + kCells + "\r\n"
       {
-        conn->send("Id too long!\r\n");
+        conn->send("Id too long!\r\n");// 请求过长，退出消息处理函数
         conn->shutdown();
         break;
       }
@@ -114,21 +111,15 @@ class SudokuServer
   }
 
   TcpServer server_;
-  int numThreads_;
   Timestamp startTime_;
 };
 
 int main(int argc, char* argv[])
 {
   LOG_INFO << "pid = " << getpid() << ", tid = " << CurrentThread::tid();
-  int numThreads = 0;
-  if (argc > 1)
-  {
-    numThreads = atoi(argv[1]);
-  }
   EventLoop loop;
   InetAddress listenAddr(9981);
-  SudokuServer server(&loop, listenAddr, numThreads);
+  SudokuServer server(&loop, listenAddr);
 
   server.start();
 
