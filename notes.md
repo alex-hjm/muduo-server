@@ -1943,6 +1943,341 @@ def handle_input(socket, data):
 ```
 注意在使用非阻塞IO ＋事件驱动方式编程的时候，一定要注意避免在事件回调中执行耗时的操作，包括阻塞IO 等，否则会影响程序的响应。
 
+**方案6**   
+这是一个过渡方案，收到Sudoku 请求之后，不在Reactor 线程计算，而是创建一个新线程去计算，以充分利用多核CPU。    
+缺点：同时创建多个线程去计算同一个连接上收到的多个请求，那么算出结果的次序是不确定的，可能第2个Sudoku 比较简单，比第1个先算出结果。（使用id区分request）
+
+**方案7**   
+为了让返回结果的顺序确定，我们可以为每个连接创建一个计算线程，每个连接上的请求固定发给同一个线程去算，先到先得。这也是一个过渡方案，因为并发连接数受限于线程数目
+> 与方案6 的另外一个区别是单个client 的最大CPU 占用率。在方案6中，一个TCP 连接上发来的一长串突发请求（burst requests）可以占满全部8 个core；而在方案7中，由于每个连接上的请求固定由同一个线程处理，那么它最多占用12.5%的CPU 资源。
 
 
+**方案8**   
+为了弥补方案6中为每个请求创建线程的缺陷，我们使用固定大小线程池，程序结构如图所示。
+
+![](images/20.jpg)
+
+把原来onMessage() 中涉及计算和发回响应的部分抽出来做成一个函数，然后交给
+ThreadPool去计算。该方案有乱序返回的可能，客户端要根据id 来匹配响应。
+[server_threadpool.cpp]()
+
+线程池的另外一个作用是执行阻塞操作。
+> 比如有的数据库的客户端只提供同步访问，那么可以把数据库查询放到线程池中，可以避免阻塞IO 线程，不会影响其他客户连接，
+
+另外也可以用线程池来调用一些阻塞的IO 函数。
+> 例如fsync(2)/fdatasync(2)，这两个函数没有非阻塞的版本
+
+**方案9**   
+这是muduo 内置的多线程方案，也是Netty 内置的多线程方案。    
+特点：one loop per thread 
+> 有一个main Reactor 负责accept(2) 连接，然后把连接挂在某个sub Reactor 中（muduo 采用round-robin 的方式来选择sub Reactor），这样该连接的所有操作都在那个sub Reactor 所处的线程中完成。多个连接可能被分派到多个线程中，以充分利用CPU。
+
+![](images/21.jpg)
+
+与方案8的线程池相比，方案9减少了进出thread pool 的两次上下文切换。在把多个连接分散到多个Reactor 线程之后，小规模计算可以在当前IO 线程完成并发回结果，从而降低响应的延迟。
+[server_multiloop]()
+
+**方案10**    
+这是Nginx 的内置方案。如果连接之间无交互，这种方案也是很好的
+选择。工作进程之间相互独立，可以热升级。
+
+**方案11**    
+把方案8 和方案9 混合，既使用多个Reactor 来处理IO，又使用线程池来处理计算。这种方案适合既有突发IO （利用多线程处理多个连接上的IO），又有突发计算的应用（利用线程池把一个连接上的计算任务分配给多个线程去做）。
+
+![](images/22.jpg)
+
+按照每千兆比特每秒的吞吐量配一个event loop 的比例来设置event loop 的数目，即muduo::TcpServer::setThreadNum() 的参数。在编写运行于千兆以太网上的网络程序时，用一个event loop 就足以应付网络IO。如果程序的IO 带宽较小，计算量较大，而且
+对延迟不敏感，那么可以把计算放到thread pool 中，也可以只用一个event loop。
+
+在muduo 中，属于同一个event loop 的连接之间没有事件优先级的差别:原因是为了防止优先级反转。
+
+## 总结
+总结起来， 推荐的C++ 多线程服务端编程模式为：one loop per thread + thread pool。
+- event loop 用作non-blocking IO 和定时器。
+- thread pool 用来做计算，具体可以是任务队列或生产者消费者队列。
+
+实用的方案有5 种，muduo 直接支持后4 种:
+
+![](images/23.jpg)
+
+# 第七章 muduo编程示例
+
+## 7.1 五个简单TCP示例
+
+介绍五个简单TCP网络服务程序:
+- echo（RFC 862）:回显服务，把收到的数据发回客户端。
+- discard（RFC 863）:丢弃所有收到的数据。
+- chargen（RFC 864）:服务端accept连接之后，不停地发送测试数据。
+- daytime（RFC 867）:服务端accept连接之后，以字符串形式发送当前时间，然
+后主动断开连接。
+- time（RFC 868）:服务端accept连接之后，以二进制形式发送当前时间（从Epoch到现在的秒数），然后主动断开连接；需要一个客户程序来把收到的时间转换为字符串。
+
+**discard**
+
+只需要关注“三个半事件”中的“消息／数据到达”事件，事件处理函数如下：
+```c++
+void DiscardServer::onMessage(const TcpConnectionPtr& conn,
+                              Buffer* buf,
+                              Timestamp time)
+{
+  string msg(buf->retrieveAllAsString());
+  LOG_INFO << conn->name() << " discards " << msg.size()
+           << " bytes received at " << time.toString();
+}
+```
+
+**daytime**
+
+只需要关注“三个半事件”中的“连接已建立”事件，事件处理函数如下：
+```c++
+void DaytimeServer::onConnection(const TcpConnectionPtr& conn)
+{
+  LOG_INFO << "DaytimeServer - " << conn->peerAddress().toIpPort() << " -> "
+           << conn->localAddress().toIpPort() << " is "
+           << (conn->connected() ? "UP" : "DOWN");
+  if (conn->connected())
+  {
+    conn->send(Timestamp::now().toFormattedString() + "\n");
+    conn->shutdown();
+  }
+}
+```
+**time**
+
+返回的是一个32-bit整数，表示从1970-01-01 00:00:00Z到现在的秒数。服务端只需要关注“三个半事件”中的“连接已建立”事件，事件处理函数如下：
+```c++
+void TimeServer::onConnection(const muduo::net::TcpConnectionPtr& conn)
+{
+  LOG_INFO << "TimeServer - " << conn->peerAddress().toIpPort() << " -> "
+           << conn->localAddress().toIpPort() << " is "
+           << (conn->connected() ? "UP" : "DOWN");
+  if (conn->connected())
+  {
+    time_t now = ::time(NULL);
+    int32_t be32 = sockets::hostToNetwork32(static_cast<int32_t>(now));
+    conn->send(&be32, sizeof be32);
+    conn->shutdown();
+  }
+}
+```
+
+**time客户端**
+
+time服务端发送的是二进制数据，不便直接阅读，编写一个客户端来解析并打印收到的4个字节数据。这个程序只需要关注“三个半事件”中的“消息／数据到达”事件，事件处理函数如下：
+```c++
+  void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp receiveTime)
+  {
+    if (buf->readableBytes() >= sizeof(int32_t))
+    {
+      const void* data = buf->peek();
+      int32_t be32 = *static_cast<const int32_t*>(data);
+      buf->retrieve(sizeof(int32_t));
+      time_t time = sockets::networkToHost32(be32);
+      Timestamp ts(implicit_cast<uint64_t>(time) * Timestamp::kMicroSecondsPerSecond);
+      LOG_INFO << "Server time = " << time << ", " << ts.toFormattedString();
+    }
+    else//如果数据没有一次性收全，已经收到的数据会累积在Buffer里
+    {
+      LOG_INFO << conn->name() << " no enough data " << buf->readableBytes()
+               << " at " << receiveTime.toFormattedString();
+    }
+  }
+  ```
+
+**echo**
+
+前面几个协议都是单向接收或发送数据，echo是第一个双向的协议：服务端把客户端发过来的数据原封不动地传回去。它只需要关注“三个半事件”中的“消息／数据到达”事件:
+```c++
+void EchoServer::onMessage(const muduo::net::TcpConnectionPtr& conn,
+                           muduo::net::Buffer* buf,//收到的数据
+                           muduo::Timestamp time)//收到数据的确切时间
+{
+  muduo::string msg(buf->retrieveAllAsString());
+  LOG_INFO << conn->name() << " echo " << msg.size() << " bytes, "
+           << "data received at " << time.toString();
+  conn->send(msg);//把收到的数据原封不动地发回客户端。
+}
+```
+这个程序还是有一个安全漏洞，即如果客户端故意不断发送数据，但从不接收，那么服务端的发送缓冲区会一直堆积，导致内存暴涨。    
+解决办法: 参考chargen协议，或者在发送缓冲区累积到一定大小时主动断开连接。
+
+**chargen**
+
+Chargen协议很特殊，它只发送数据，不接收数据。而且，它发送数据的速度不能快过客户端接收的速度，因此需要关注“三个半事件”中的半个“消息／数据发送完毕”事件（onWriteComplete），事件处理函数如下：
+```c++
+void ChargenServer::onConnection(const TcpConnectionPtr& conn)
+{
+  LOG_INFO << "ChargenServer - " << conn->peerAddress().toIpPort() << " -> "
+           << conn->localAddress().toIpPort() << " is "
+           << (conn->connected() ? "UP" : "DOWN");
+  if (conn->connected())
+  {
+    conn->setTcpNoDelay(true);
+    conn->send(message_);
+  }
+}
+
+void ChargenServer::onMessage(const TcpConnectionPtr& conn,
+                              Buffer* buf,
+                              Timestamp time)
+{
+  string msg(buf->retrieveAllAsString());
+  LOG_INFO << conn->name() << " discards " << msg.size()
+           << " bytes received at " << time.toString();
+}
+
+void ChargenServer::onWriteComplete(const TcpConnectionPtr& conn)
+{
+  transferred_ += message_.size();
+  conn->send(message_);
+}
+``` 
+
+**五合一**
+
+muduo遵循one loop per thread模型，多个服务端（TcpServer）和客户端（TcpClient）可以共享同一个EventLoop，也可以分配到多个EventLoop上以发挥多核多线程的好处。这里我们把五个服务端用同一个EventLoop跑起来，程序还是单线程的，功能却强大了很多：
+```c++
+int main()
+{
+  LOG_INFO << "pid = " << getpid();
+  EventLoop loop;  // one loop shared by multiple servers
+
+  ChargenServer chargenServer(&loop, InetAddress(2019));
+  chargenServer.start();
+
+  DaytimeServer daytimeServer(&loop, InetAddress(2013));
+  daytimeServer.start();
+
+  DiscardServer discardServer(&loop, InetAddress(2009));
+  discardServer.start();
+
+  EchoServer echoServer(&loop, InetAddress(2007));
+  echoServer.start();
+
+  TimeServer timeServer(&loop, InetAddress(2037));
+  timeServer.start();
+
+  loop.loop();
+}
+```
+
+## 7.2文件传输
+
+TcpConnection目前提供了三个send()重载函数，原型如下:
+```c++
+class TcpConnection : noncopyable,
+                      public std::enable_shared_from_this<TcpConnection>
+{
+ public:
+
+ // void send(string&& message); // C++11
+  void send(const void* message, int len);
+  void send(const StringPiece& message);
+  // void send(Buffer&& message); // C++11
+  void send(Buffer* message);  // this one will swap data
+
+};
+```
+使用TcpConnection::send()时值得注意的有几点：
+- send()的返回类型是void，意味着用户不必关心调用send()时成功发送了多少字节
+- send()是非阻塞的。意味着客户代码只管把一条消息准备好，调用send()来发送，即便TCP的发送窗口满了，也绝对不会阻塞当前调用线程。
+- send()是线程安全、原子的。多个线程可以同时调用send()，消息之间不会混叠或交织。send()在多线
+程下仍然是非阻塞的。
+- send(const void* message, size_t len)这个重载最平淡无奇，可以发送任意字节序列。
+- send(const StringPiece& message)这个重载可以发送std::string和const char*。
+- send(Buffer*)有点特殊，它以指针为参数，而不是常见的const引用，因为函数中可能Buffer::swap()来高效地交换数据，避免内存拷贝，起到类似C++右值引用的效果。
+
+实现一个发送文件的命令行小工具：在启动时通过命令行参数指定要发送的文件，然后在2021端口侦听，每当有新连接进来，就把文件内容完整地发送给对方。
+- 发送100MB的文件，支持上万个并发客户连接；
+- 内存消耗只与并发连接数有关，跟文件大小无关；
+- 任何连接可以在任何时候断开，程序不会有内存泄漏或崩溃。
+
+
+[download]():    
+> 一次性把文件读入内存，一次性调用send(const string&)发送完毕。这个版本满足除了“内存消耗只与并发连接数有关，跟文件大小无关”之外的健壮性要求。   
+> 问题：内存消耗与（并发连接数×文件大小）成正比，文件越大内存消耗越多   
+> 办法：采用流水线的思路，当新建连接时，先发送文件的前64KiB数据，等这块数据发送完毕时再继续发送下64KiB数据，如此往复直到文件内容全部发送完毕。
+
+[download2]()
+> 一块一块地发送文件，减少内存使用，用到了WriteCompleteCallback。这个版本满足了上述全部健壮性要求。   
+> 问题:  如果客户端故意只发起连接，不接收数据，那么要么把服务器进程的文件描述符耗尽，要么占用很多服务端内存（因为每个连接有64KiB的发送缓冲区）。    
+> 办法：限制服务器的最大并发连接数/用timing wheel踢掉空闲连接
+
+[download3]()
+> 同2，但是采用shared_ptr来管理FILE*，避免手动调用::fclose(3)。
+> 通过将资源与对象生命期绑定，在对象析构的时候自动释放资源，从而把资源管理转换为对象生命期管理，而后者是早已解决了的问题。这正是C++最重要的编程技法：RAII。
+
+TCP是一个全双工协议，同一个文件描述符既可读又可写，shutdownWrite()关闭了“写”方向的连接，保留了“读”方向，这称为TCP half-close。如果直接close(socket_fd)，那么socket_fd就不能读或写了。
+
+也就是说muduo把“主动关闭连接”这件事情分成两步来做，如果要主动关闭连接，它会先关本地“写”端，等对方关闭之后，再关本地“读”端。
+
+另外，如果当前output buffer里还有数据尚未发出的话，muduo也不会立刻调用shutdownWrite，而是等到数据发送完毕再shutdown，可以避免对方漏收数据。
+```c++
+void TcpConnection::handleWrite()
+{
+  loop_->assertInLoopThread();
+  if (channel_->isWriting())
+  {
+    ssize_t n = sockets::write(channel_->fd(),
+                               outputBuffer_.peek(),
+                               outputBuffer_.readableBytes());
+    if (n > 0)
+    {
+      outputBuffer_.retrieve(n);
+      if (outputBuffer_.readableBytes() == 0)
+      {
+        channel_->disableWriting();
+        if (writeCompleteCallback_)
+        {
+          loop_->queueInLoop(std::bind(writeCompleteCallback_, 
+                                       shared_from_this()));
+        }
+        if (state_ == kDisconnecting)
+        {
+          shutdownInLoop();
+        }
+      }
+    }
+  }
+}
+```
+![](images/24.jpg)
+
+当发完了数据，于是shutdownWrite，发送TCP FIN分节，对方会读到0字节，然后对方通常会关闭连接。这样muduo会读到0字节，然后muduo关闭连接。
+
+在网络编程中，应用程序发送数据往往比接收数据简单（实现非阻塞网络库正相反，发送比接收难）
+
+## 7.3 Boost.Asio的聊天服务器
+
+[chat]()
+> 主要目的是介绍如何处理分包
+
+分包指的是在发生一个消息（message）或一帧（frame）数据时，通过一定的处理，让接收方能从字节流中识别并截取（还原）出一个个消息。“粘包问题”是个伪问题。
+
+- 对于短连接的TCP服务，分包不是一个问题，只要发送方主动关闭连接，就表示一条消息发送完毕，接收方read()返回0，从而知道消息的结尾。
+- 对于长连接的TCP服务，分包有四种方法：
+    1. 消息长度固定，比如muduo的roundtrip示例就采用了固定的16字节消息。
+    2. 使用特殊的字符或字符串作为消息的边界，例如HTTP协议的headers以“\r\n”为字段的分隔符。
+    3. 在每条消息的头部加一个长度字段，这恐怕是最常见的做法，本文的聊天协议也采用这一办法。
+    4. 利用消息本身的格式来分包，例如XML格式的消息中<root>...</root>的配对，或者JSON格式中的{ ... }的配对。解析这种消息格式通常会用到状态机（state machine）。
+
+**聊天服务**
+
+由服务端程序和客户端程序组成，协议如下：
+- 服务端程序在某个端口侦听（listen）新的连接。
+- 客户端向服务端发起连接。
+- 连接建立之后，客户端随时准备接收服务端的消息并在屏幕上显示出来。
+- 客户端接受键盘输入，以回车为界，把消息发送给服务端。
+- 服务端接收到消息之后，依次发送给每个连接到它的客户端；原来发送消息的客户端进程也会收到这条消息。
+- 一个服务端进程可以同时服务多个客户端进程。当有消息到达服务端后，每个客户端进程都会收到同一条消息，服务端广播发送消息的顺序是任意的，不一定哪个客户端会先收到这条消息。
+- （可选）如果消息A先于消息B到达服务端，那么每个客户端都会先收到A再收到B。
+
+**消息格式**
+
+“消息”本身是一个字符串，每条消息有一个4字节的头部，以网络序存放字符串的长度。
+
+![](images/25.jpg)
+
+打包的代码:   
+```c++
 
