@@ -2549,3 +2549,142 @@ int main(int argc, char* argv[])
 
 ## 7.4 muduo Buffer类的设计与使用
 
+如果采用one loop per thread的模型，多线程服务端编程的问题就简化为如何设计一个高效且易于使用的event loop，然后每个线程run一个event loop就行了（当然、同步和互斥是不可或缺的）。
+
+event loop是non-blocking网络编程的核心，在现实生活中，nonblocking几乎总是和IO multiplexing一起使用，原因有两点：
+- 用轮询（busy-pooling）来检查某个non-blocking IO操作浪费CPU cycles。
+- IO multiplexing一般不能和blocking IO用在一起，因为blocking IO中read()/write()/accept()/connect()都有可能阻塞当前线程，这样线程就没办法处理其他socket上的IO事件了。
+
+non-blocking IO的核心思想：   
+是避免阻塞在read()或write()或其他IO系统调用上，这样可以最大限度地复用thread-of-control，让一个线程能服务于多个socket连接。
+
+- **TcpConnection必须要有output buffer**：让程序在write操作上不阻塞
+- **TcpConnection必须要有input buffer**：网络库在处理“socket可读”事件的时候，必须一次性把socket里的数据读完
+
+**Buffer的功能需求**
+
+muduo Buffer的设计要点：    
+- 对外表现为一块连续的内存(char* p, int len)，以方便客户代码的编写。
+- 其size()可以自动增长，以适应不同大小的消息。
+- 内部以std::vector<char>来保存数据，并提供相应的访问函数。
+
+TcpConnection会有两个Buffer成员，input buffer与output buffer：
+- input buffer
+> TcpConnection会从socket读取数据，然后写入inputbuffer（其实这一步是用Buffer::readFd()完成的）；客户代码从inputbuffer读取数据
+
+- output buffer
+> 客户代码会把数据写入output buffer（其实这一步是用TcpConnection::send()完成的）；TcpConnection从output buffer读取数据并写入socket。
+
+![](images/26.jpg)
+
+## 7.5 限制服务器的最大并发连接数
+
+**为什么要限制并发连接数**
+- 一方面，不希望服务程序超载；
+- 另一方面，更因为filedescriptor是稀缺资源;
+
+**在muduo中限制并发连接数**
+
+以[EchoServer]()为例，只需要为它增加一个int成员，表示当前的活动连接数.然后，在EchoServer::onConnection()中判断当前活动连接数。如果超过最大允许数，则踢掉连接。
+```c++
+void EchoServer::onConnection(const TcpConnectionPtr& conn)
+{
+  LOG_INFO << "EchoServer - " << conn->peerAddress().toIpPort() << " -> "
+           << conn->localAddress().toIpPort() << " is "
+           << (conn->connected() ? "UP" : "DOWN");
+
+  if (conn->connected())
+  {
+    ++numConnected_;
+    if (numConnected_ > kMaxConnections_)
+    {
+      conn->shutdown();
+      conn->forceCloseWithDelay(3.0);  // > round trip of the whole Internet.
+    }
+  }
+  else
+  {
+    --numConnected_;
+  }
+  LOG_INFO << "numConnected = " << numConnected_;
+}
+```
+## 7.6 定时器
+
+**Linux时间函数：**
+- time(2) / time_t（秒）
+- ftime(3) / struct timeb（毫秒）
+- gettimeofday(2) / struct timeval（微秒）
+- clock_gettime(2) / struct timespec（纳秒）
+
+**定时函数，用于让程序等待一段时间或安排计划任务：**
+- sleep(3)
+- alarm(2)
+- usleep(3)
+- nanosleep(2)
+- clock_nanosleep(2)
+- getitimer(2) / setitimer(2)
+- timer_create(2) / timer_settime(2) / timer_gettime(2) / timer_delete(2)
+- timerfd_create(2) / timerfd_gettime(2) / timerfd_settime(2)
+
+取舍如下：
+- （计时）只使用gettimeofday(2)来获取当前时间。
+- （定时）只使用timerfd_*系列函数来处理定时任务。
+
+**muduo的定时器接口**
+```c++
+class EventLoop : noncopyable
+{
+ public:
+  //...
+  /// Runs callback at 'time'.
+  TimerId runAt(Timestamp time, TimerCallback cb);
+
+  /// Runs callback after @c delay seconds.
+  TimerId runAfter(double delay, TimerCallback cb);
+
+  /// Runs callback every @c interval seconds.
+  TimerId runEvery(double interval, TimerCallback cb);
+
+  /// Cancels the timer.
+  void cancel(TimerId timerId);
+};
+```
+- runAt在指定的时间调用TimerCallback；
+- runAfter等一段时间调用TimerCallback；
+- runEvery以固定的间隔反复调用TimerCallback；
+- cancel取消timer。
+
+1. [timer2]()
+> 非阻塞定时
+2. [timer3]()
+> 在TimerCallback里传递参数
+3. [timer4]()
+> 以成员函数为TimerCallback
+4. [timer5]()
+> 在多线程中回调，用mutex保护共享变量
+5. [timer6]()
+> 在多线程中回调，缩小临界区，把不需要互斥执行的代码移出来
+
+## 7.7 测量两台机器的网络延迟和时间差
+
+一个简单的网络程序roundtrip，用于测量两台机器之间的网络延迟，即“往返时间（round trip time，RTT）”。其主要考察定长TCP消息的分包与TCP_NODELAY的作用。
+
+[roundtrip]()测量round trip time的办法很简单：
+- host A发一条消息给host B，其中包含host A发送消息的本地时间。
+- host B收到之后立刻把消息echo回host A。
+- host A收到消息之后，用当前时间减去消息中的时间就得到了round trip time。
+
+## 7.8 用timing wheel踢掉空闲连接
+
+一个连接如果若干秒没有收到数据，就被认为是空闲连接。代码[idleconnection]()
+
+# 第八章 muduo网络库设计与实现
+
+
+
+
+
+
+
+
