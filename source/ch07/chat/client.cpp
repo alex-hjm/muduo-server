@@ -1,9 +1,9 @@
-#include "examples/asio/chat/codec.h"
+#include "codec.h"
 
-#include "muduo/base/Logging.h"
-#include "muduo/base/Mutex.h"
-#include "muduo/net/EventLoopThread.h"
-#include "muduo/net/TcpClient.h"
+#include "Logging.h"
+#include "Mutex.h"
+#include "EventLoopThread.h"
+#include "TcpClient.h"
 
 #include <iostream>
 #include <stdio.h>
