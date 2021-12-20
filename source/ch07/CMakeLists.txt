@@ -23,7 +23,7 @@ add_executable(chat_client chat/client.cpp)
 add_executable(chat_server_threaded chat/server_threaded.cpp)
 add_executable(chat_server_threaded_efficient chat/server_threaded_efficient.cpp)
 add_executable(chat_server_threaded_highperformance chat/server_threaded_highperformance.cpp)
-
+add_executable(echo_max maxconnection/echo.cpp)
 #lib
 target_link_libraries(discard muduo_net muduo_base)
 target_link_libraries(daytime muduo_net muduo_base)
@@ -36,3 +36,4 @@ target_link_libraries(chat_client muduo_net muduo_base)
 target_link_libraries(chat_server_threaded muduo_net muduo_base)
 target_link_libraries(chat_server_threaded_efficient muduo_net muduo_base)
 target_link_libraries(chat_server_threaded_highperformance muduo_net muduo_base)
+target_link_libraries(echo_max uduo_net muduo_base)
