@@ -2278,6 +2278,274 @@ void TcpConnection::handleWrite()
 
 ![](images/25.jpg)
 
-打包的代码:   
+**打包的代码：**    
+把string message打包为muduo::net::Buffer，并通过conn发送。:   
 ```c++
+  void send(muduo::net::TcpConnection* conn,
+            const muduo::StringPiece& message)
+  {
+    muduo::net::Buffer buf;
+    buf.append(message.data(), message.size());
+    int32_t len = static_cast<int32_t>(message.size());
+    int32_t be32 = muduo::net::sockets::hostToNetwork32(len);
+    buf.prepend(&be32, sizeof be32);
+    conn->send(&buf);
+  }
+  ```
+
+  **分包的代码：**    
+  ```c++
+void onMessage(const muduo::net::TcpConnectionPtr& conn,
+                 muduo::net::Buffer* buf,
+                 muduo::Timestamp receiveTime)
+  {
+    while (buf->readableBytes() >= kHeaderLen) // kHeaderLen == 4
+    {
+      // FIXME: use Buffer::peekInt32()
+      const void* data = buf->peek();
+      int32_t be32 = *static_cast<const int32_t*>(data); // SIGBUS
+      const int32_t len = muduo::net::sockets::networkToHost32(be32);
+      if (len > 65536 || len < 0)
+      {
+        LOG_ERROR << "Invalid length " << len;
+        conn->shutdown();  // FIXME: disable reading
+        break;
+      }
+      else if (buf->readableBytes() >= len + kHeaderLen)
+      {
+        buf->retrieve(kHeaderLen);
+        muduo::string message(buf->peek(), len);//构造完整的消息
+        messageCallback_(conn, message, receiveTime);//回调用户代码
+        buf->retrieve(len);
+      }
+      else
+      {
+        break;
+      }
+    }
+  }
+  ```
+**编解码器LengthHeaderCodec**
+
+每当socket可读时，muduo的TcpConnection会读取数据并存入input buffer，然后回调用户的函数。
+```c++
+class LengthHeaderCodec : muduo::noncopyable
+{
+ public:
+  typedef std::function<void (const muduo::net::TcpConnectionPtr&,
+                                const muduo::string& message,
+                                muduo::Timestamp)> StringMessageCallback;
+
+  explicit LengthHeaderCodec(const StringMessageCallback& cb)
+    : messageCallback_(cb)
+  {
+  }
+
+  //onMessage send同前
+
+   private:
+  StringMessageCallback messageCallback_;
+  const static size_t kHeaderLen = sizeof(int32_t);
+}
+```
+
+**服务端的实现**
+
+除了经常见到的EventLoop和TcpServer，ChatServer还定义了codec_和connections_作为成员，后者存放目前已建立的客户连接。在收到消息之后，服务器会遍历整个容器，把消息广播给其中的每一个TCP连接（onStringMessage()）。
+
+首先，在构造函数里注册回调：
+```c++
+class ChatServer : noncopyable
+{
+ public:
+  ChatServer(EventLoop* loop,
+             const InetAddress& listenAddr)
+  : server_(loop, listenAddr, "ChatServer"),
+  //codec_负责解析消息，然后把完整的消息回调给ChatServer
+    codec_(std::bind(&ChatServer::onStringMessage, this, _1, _2, _3))
+  {
+    server_.setConnectionCallback(
+        std::bind(&ChatServer::onConnection, this, _1));
+    server_.setMessageCallback(
+        std::bind(&LengthHeaderCodec::onMessage, &codec_, _1, _2, _3));
+  }
+
+  void start()
+  {
+    server_.start();//不能在构造函数里调用，会有线程安全的问题
+  }
+```
+处理连接的建立和断开的代码：
+```c++
+private:
+  void onConnection(const TcpConnectionPtr& conn)
+  {
+    LOG_INFO << conn->peerAddress().toIpPort() << " -> "
+             << conn->localAddress().toIpPort() << " is "
+             << (conn->connected() ? "UP" : "DOWN");
+
+    //避免内存和资源泄漏
+    if (conn->connected())
+    {
+      connections_.insert(conn);//新建的连接加入到connections_容器中
+    }
+    else
+    {
+      connections_.erase(conn);//把已断开的连接从容器中删除
+    }
+  }
+  ```
+
+  服务端处理消息的代码:
+  ```c++
+  void onStringMessage(const TcpConnectionPtr&,
+                       const string& message,
+                       Timestamp)
+  {
+    for (ConnectionList::iterator it = connections_.begin();
+        it != connections_.end();
+        ++it)
+    {
+      codec_.send(get_pointer(*it), message);
+    }
+  }
+  ```
+数据成员：
+```c++
+  typedef std::set<TcpConnectionPtr> ConnectionList;
+  TcpServer server_;
+  LengthHeaderCodec codec_;
+  ConnectionList connections_;
+```
+main:
+```c++
+int main(int argc, char* argv[])
+{
+  LOG_INFO << "pid = " << getpid();
+  if (argc > 1)
+  {
+    EventLoop loop;
+    uint16_t port = static_cast<uint16_t>(atoi(argv[1]));
+    InetAddress serverAddr(port);
+    ChatServer server(&loop, serverAddr);
+    server.start();
+    loop.loop();
+  }
+  else
+  {
+    printf("Usage: %s port\n", argv[0]);
+  }
+}
+```
+
+
+**客户端的实现**
+
+用了两个线程：main()函数所在的线程负责读键盘，另外用一个EventLoopThread来处理网络IO。
+
+首先，在构造函数里注册回调，并使用了跟前面一样的LengthHeaderCodec作为中间层，负责打包、分包:
+```c++
+class ChatClient : noncopyable
+{
+ public:
+  ChatClient(EventLoop* loop, const InetAddress& serverAddr)
+    : client_(loop, serverAddr, "ChatClient"),
+      codec_(std::bind(&ChatClient::onStringMessage, this, _1, _2, _3))
+  {
+    client_.setConnectionCallback(
+        std::bind(&ChatClient::onConnection, this, _1));
+    client_.setMessageCallback(
+        std::bind(&LengthHeaderCodec::onMessage, &codec_, _1, _2, _3));
+    client_.enableRetry();
+  }
+
+  void connect()
+  {
+    client_.connect();
+  }
+```
+write()会由main线程调用，所以要加锁，这个锁不是为了保护TcpConnection，而是为了保护shared_ptr。
+```c++
+ void write(const StringPiece& message)
+  {
+    MutexLockGuard lock(mutex_);
+    if (connection_)
+    {
+      codec_.send(get_pointer(connection_), message);
+    }
+  }
+```
+onConnection()会由EventLoop线程调用，所以要加锁以保护shared_ptr。
+```c++
+private:
+  void onConnection(const TcpConnectionPtr& conn)
+  {
+    LOG_INFO << conn->localAddress().toIpPort() << " -> "
+             << conn->peerAddress().toIpPort() << " is "
+             << (conn->connected() ? "UP" : "DOWN");
+
+    MutexLockGuard lock(mutex_);
+    if (conn->connected())
+    {
+      connection_ = conn;
+    }
+    else
+    {
+      connection_.reset();
+    }
+  }
+```
+把收到的消息打印到屏幕，这个函数由EventLoop线程调用，但是不用加锁，因为printf()是线程安全的。不能用std::cout<<，它不是线程安全的。
+```c++
+ void onStringMessage(const TcpConnectionPtr&,
+                       const string& message,
+                       Timestamp)
+  {
+    printf("<<< %s\n", message.c_str());
+  }
+```
+数据成员：
+```c++
+  TcpClient client_;
+  LengthHeaderCodec codec_;
+  MutexLock mutex_;
+  TcpConnectionPtr connection_ GUARDED_BY(mutex_);
+```
+main()函数里除了例行公事，还要启动EventLoop线程和读取键盘输入。
+```C++
+int main(int argc, char* argv[])
+{
+  LOG_INFO << "pid = " << getpid();
+  if (argc > 2)
+  {
+    EventLoopThread loopThread;
+    uint16_t port = static_cast<uint16_t>(atoi(argv[2]));
+    InetAddress serverAddr(argv[1], port);
+
+    ChatClient client(loopThread.startLoop(), serverAddr);
+    client.connect();
+    std::string line;
+    while (std::getline(std::cin, line))
+    {
+      client.write(line);
+    }
+    client.disconnect();
+    CurrentThread::sleepUsec(1000*1000);  // wait for disconnect, see ace/logging/client.cc
+  }
+  else
+  {
+    printf("Usage: %s host_ip port\n", argv[0]);
+  }
+}
+```
+[server_threaded]()
+> 使用多线程TcpServer，并用mutex来保护共享数据。
+
+[server_threaded_efficient]()
+> 对共享数据以“借shared_ptr实现copyon-write”的手法来降低锁竞争。
+
+[server_threaded_highperformance]()
+> 采用thread local变量，实现多线程高效转发，这个例子值得仔细阅读理解。
+
+## 7.4 muduo Buffer类的设计与使用
 
