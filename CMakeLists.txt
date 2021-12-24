@@ -93,8 +93,8 @@ include_directories(${Boost_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR})
 
 # muduo lib
-add_subdirectory(muduo/base)
-add_subdirectory(muduo/net)
+#add_subdirectory(muduo/base)
+#add_subdirectory(muduo/net)
 
 # book src
 add_subdirectory(source)
