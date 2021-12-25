@@ -1,123 +1,136 @@
-// Use of this source code is governed by a BSD-style license
-// that can be found in the License file.
-//
-// Author: Shuo Chen (chenshuo at chenshuo dot com)
+#ifndef TIMESTAMP_H
+#define TIMESTAMP_H
+#include <string>
+#include <time.h>
 
-#ifndef MUDUO_BASE_TIMESTAMP_H
-#define MUDUO_BASE_TIMESTAMP_H
+namespace muduo {
+class Timestamp {
+public:
+  /**
+   * @brief 构造一个非法的TimeStamp类
+   *
+   */
+  Timestamp() : microSecondsSinceEpoch_(0) {}
 
-#include "muduo/base/copyable.h"
-#include "muduo/base/Types.h"
+  /**
+   * @brief 构造一个指定时间的Timestamp类
+   *
+   * @param microSecondsSinceEpoch
+   */
+  explicit Timestamp(int64_t microSecondsSinceEpoch)
+      : microSecondsSinceEpoch_(microSecondsSinceEpoch) {}
 
-#include <boost/operators.hpp>
-
-namespace muduo
-{
-
-///
-/// Time stamp in UTC, in microseconds resolution.
-///
-/// This class is immutable.
-/// It's recommended to pass it by value, since it's passed in register on x64.
-///
-class Timestamp : public muduo::copyable,
-                  public boost::equality_comparable<Timestamp>,
-                  public boost::less_than_comparable<Timestamp>
-{
- public:
-  ///
-  /// Constucts an invalid Timestamp.
-  ///
-  Timestamp()
-    : microSecondsSinceEpoch_(0)
-  {
+  void swap(Timestamp &rhs) {
+    std::swap(microSecondsSinceEpoch_, rhs.microSecondsSinceEpoch_);
   }
 
-  ///
-  /// Constucts a Timestamp at specific time
-  ///
-  /// @param microSecondsSinceEpoch
-  explicit Timestamp(int64_t microSecondsSinceEpochArg)
-    : microSecondsSinceEpoch_(microSecondsSinceEpochArg)
-  {
-  }
+  /**
+   * @brief such: 1422366082.375828
+   *
+   * @return std::string
+   */
+  std::string toString() const;
 
-  void swap(Timestamp& that)
-  {
-    std::swap(microSecondsSinceEpoch_, that.microSecondsSinceEpoch_);
-  }
+  /**
+   * @brief such: 20150127 21:46:45:376742
+   *
+   * @return std::string
+   */
+  std::string toFormattedString(bool showMicroseconds = true) const;
 
-  // default copy/assignment/dtor are Okay
-
-  string toString() const;
-  string toFormattedString(bool showMicroseconds = true) const;
-
+  /**
+   * @brief 该时间戳对象是否是有效的
+   *
+   * @return true
+   * @return false
+   */
   bool valid() const { return microSecondsSinceEpoch_ > 0; }
 
-  // for internal usage.
+  /**
+   * @brief 返回精确的微秒时间戳
+   *
+   * @return int64_t
+   */
   int64_t microSecondsSinceEpoch() const { return microSecondsSinceEpoch_; }
-  time_t secondsSinceEpoch() const
-  { return static_cast<time_t>(microSecondsSinceEpoch_ / kMicroSecondsPerSecond); }
 
-  ///
-  /// Get time of now.
-  ///
+  /**
+   * @brief 返回以s为单位的普通时间戳
+   *
+   * @return time_t
+   */
+  time_t secondsSinceEpoch() const {
+    return static_cast<time_t>(microSecondsSinceEpoch_ /
+                               kMicroSecondsPerSecond);
+  }
+
+  /**
+   * @brief 获取当前时间
+   *
+   * @return Timestamp
+   */
   static Timestamp now();
-  static Timestamp invalid()
-  {
-    return Timestamp();
-  }
 
-  static Timestamp fromUnixTime(time_t t)
-  {
-    return fromUnixTime(t, 0);
-  }
+  /**
+   * @brief 获取一个不可用的时间戳
+   *
+   * @return Timestamp
+   */
+  static Timestamp invalid() { return Timestamp(); }
 
-  static Timestamp fromUnixTime(time_t t, int microseconds)
-  {
-    return Timestamp(static_cast<int64_t>(t) * kMicroSecondsPerSecond + microseconds);
+  static Timestamp fromUnixTime(time_t t) { return fromUnixTime(t, 0); }
+
+  static Timestamp fromUnixTime(time_t t, int microseconds) {
+    return Timestamp(static_cast<int64_t>(t) * kMicroSecondsPerSecond +
+                     microseconds);
   }
 
   static const int kMicroSecondsPerSecond = 1000 * 1000;
 
- private:
+private:
+  /**
+   * @brief 以微秒为单位
+   *
+   */
   int64_t microSecondsSinceEpoch_;
 };
 
-inline bool operator<(Timestamp lhs, Timestamp rhs)
-{
+inline bool operator<(Timestamp lhs, Timestamp rhs) {
   return lhs.microSecondsSinceEpoch() < rhs.microSecondsSinceEpoch();
 }
 
-inline bool operator==(Timestamp lhs, Timestamp rhs)
-{
+inline bool operator>(Timestamp lhs, Timestamp rhs) {
+  return lhs.microSecondsSinceEpoch() > rhs.microSecondsSinceEpoch();
+}
+
+inline bool operator==(Timestamp lhs, Timestamp rhs) {
   return lhs.microSecondsSinceEpoch() == rhs.microSecondsSinceEpoch();
 }
 
-///
-/// Gets time difference of two timestamps, result in seconds.
-///
-/// @param high, low
-/// @return (high-low) in seconds
-/// @c double has 52-bit precision, enough for one-microsecond
-/// resolution for next 100 years.
-inline double timeDifference(Timestamp high, Timestamp low)
-{
+/**
+ * @brief 返回两个时间戳的差
+ *
+ * @param high 较大的时间
+ * @param low 较小的时间
+ * @return double 整数部分以s为单位
+ */
+inline double timeDifference(Timestamp high, Timestamp low) {
   int64_t diff = high.microSecondsSinceEpoch() - low.microSecondsSinceEpoch();
   return static_cast<double>(diff) / Timestamp::kMicroSecondsPerSecond;
 }
 
-///
-/// Add @c seconds to given timestamp.
-///
-/// @return timestamp+seconds as Timestamp
-///
-inline Timestamp addTime(Timestamp timestamp, double seconds)
-{
-  int64_t delta = static_cast<int64_t>(seconds * Timestamp::kMicroSecondsPerSecond);
-  return Timestamp(timestamp.microSecondsSinceEpoch() + delta);
+/**
+ * @brief 时间戳加上秒数生成新的时间戳
+ *
+ * @param timestamp
+ * @param seconds
+ * @return Timestamp
+ */
+inline Timestamp addTimer(Timestamp timestamp, double seconds) {
+  int64_t delta =
+      static_cast<int64_t>(seconds * Timestamp::kMicroSecondsPerSecond);
+  return Timestamp((timestamp.microSecondsSinceEpoch() + delta));
 }
 
-}  // namespace muduo
+} // namespace muduo
 
-#endif  // MUDUO_BASE_TIMESTAMP_H
+#endif // TIMESTAMP_H

@@ -1,54 +1,45 @@
-// Use of this source code is governed by a BSD-style license
-// that can be found in the License file.
-//
-// Author: Shuo Chen (chenshuo at chenshuo dot com)
+#ifndef CURRENTTHREAD_H
+#define CURRENTTHREAD_H
 
-#ifndef MUDUO_BASE_CURRENTTHREAD_H
-#define MUDUO_BASE_CURRENTTHREAD_H
+#include <string>
 
-#include "muduo/base/Types.h"
+namespace muduo {
 
-namespace muduo
+namespace CurrentThread {
+// internal
+extern __thread int t_cachedTid;      // 真实线程Tid的缓存
+extern __thread char t_tidString[32]; // 真实线程Tid的字符串表示形式
+extern __thread int t_tidStringLength;
+extern __thread const char *t_threadName;
+void cacheTid();
+
+inline int tid() {
+  if (__builtin_expect(t_cachedTid == 0, 0)) {
+    cacheTid();
+  }
+  return t_cachedTid;
+}
+
+inline const char *tidString() // for logging
 {
-namespace CurrentThread
+  return t_tidString;
+}
+
+inline int tidStringLength() // for logging
 {
-  // internal
-  extern __thread int t_cachedTid;
-  extern __thread char t_tidString[32];
-  extern __thread int t_tidStringLength;
-  extern __thread const char* t_threadName;
-  void cacheTid();
+  return t_tidStringLength;
+}
 
-  inline int tid()
-  {
-    if (__builtin_expect(t_cachedTid == 0, 0))
-    {
-      cacheTid();
-    }
-    return t_cachedTid;
-  }
+inline const char *name() { return t_threadName; }
 
-  inline const char* tidString() // for logging
-  {
-    return t_tidString;
-  }
+bool isMainThread();
 
-  inline int tidStringLength() // for logging
-  {
-    return t_tidStringLength;
-  }
+void sleepUsec(int64_t usec); // for testing
 
-  inline const char* name()
-  {
-    return t_threadName;
-  }
+std::string stackTrace(bool demangle);
 
-  bool isMainThread();
+} // namespace CurrentThread
 
-  void sleepUsec(int64_t usec);  // for testing
+} // namespace muduo
 
-  string stackTrace(bool demangle);
-}  // namespace CurrentThread
-}  // namespace muduo
-
-#endif  // MUDUO_BASE_CURRENTTHREAD_H
+#endif // CURRENTTHREAD_H
