@@ -1,5 +1,7 @@
-file(GLOB SRC_LIST "*.cpp")
+file(GLOB SRC_LIST "*.cpp" )
 
 add_library(base ${SRC_LIST})
+
+message(${SRC_LIST})
 
 target_link_libraries(base pthread)

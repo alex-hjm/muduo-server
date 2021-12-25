@@ -1,5 +1,5 @@
-#ifndef TIMESTAMP_H
-#define TIMESTAMP_H
+#ifndef BASE_TIMESTAMP_H
+#define BASE_TIMESTAMP_H
 #include <string>
 #include <time.h>
 
@@ -133,4 +133,4 @@ inline Timestamp addTimer(Timestamp timestamp, double seconds) {
 
 } // namespace muduo
 
-#endif // TIMESTAMP_H
+#endif // BASE_TIMESTAMP_H

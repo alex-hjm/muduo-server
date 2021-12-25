@@ -1,4 +1,4 @@
-#include "Atomic.h"
+#include "../Atomic.h"
 #include <assert.h>
 #include <iostream>
 

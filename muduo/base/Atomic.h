@@ -1,5 +1,5 @@
-#ifndef ATOMIC_H
-#define ATOMIC_H
+#ifndef BASE_ATOMIC_H
+#define BASE_ATOMIC_H
 
 #include <stdint.h>
 
@@ -72,4 +72,4 @@ typedef detail::AtomicIntegerT<int64_t> AtomicInt64;
 
 } // namespace muduo
 
-#endif // ATOMIC_H
+#endif // BASE_ATOMIC_H

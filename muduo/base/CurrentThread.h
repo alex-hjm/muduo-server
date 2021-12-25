@@ -1,5 +1,5 @@
-#ifndef CURRENTTHREAD_H
-#define CURRENTTHREAD_H
+#ifndef BASE_CURRENTTHREAD_H
+#define BASE_CURRENTTHREAD_H
 
 #include <string>
 
@@ -42,4 +42,4 @@ std::string stackTrace(bool demangle);
 
 } // namespace muduo
 
-#endif // CURRENTTHREAD_H
+#endif // BASE_CURRENTTHREAD_H

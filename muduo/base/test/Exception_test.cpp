@@ -1,4 +1,4 @@
-#include "Exception.h"
+#include "../Exception.h"
 #include <stdio.h>
 
 class Bar

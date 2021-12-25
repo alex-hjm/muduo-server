@@ -1,5 +1,5 @@
-#ifndef MUDUO_EXCEPTION_H
-#define MUDUO_EXCEPTION_H
+#ifndef BASE_EXCEPTION_H
+#define BASE_EXCEPTION_H
 
 #include <exception>
 #include <string>
@@ -29,4 +29,4 @@ public:
 
 } // namespace muduo
 
-#endif // MUDUO_EXCEPTION_H
+#endif // BASE_EXCEPTION_H
