@@ -1,6 +1,7 @@
 #ifndef BASE_TIMESTAMP_H
 #define BASE_TIMESTAMP_H
-#include <string>
+
+#include "Types.h"
 #include <time.h>
 
 namespace muduo {
@@ -27,16 +28,16 @@ public:
   /**
    * @brief such: 1422366082.375828
    *
-   * @return std::string
+   * @return string
    */
-  std::string toString() const;
+  string toString() const;
 
   /**
    * @brief such: 20150127 21:46:45:376742
    *
-   * @return std::string
+   * @return string
    */
-  std::string toFormattedString(bool showMicroseconds = true) const;
+  string toFormattedString(bool showMicroseconds = true) const;
 
   /**
    * @brief 该时间戳对象是否是有效的

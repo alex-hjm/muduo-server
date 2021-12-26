@@ -14,12 +14,6 @@ __thread const char *t_threadName = "unknown";
 // 静态断言:编译期间的断言
 static_assert(std::is_same<int, pid_t>::value, "pid_t should be int");
 
-/**
- * @brief 返回栈的调用痕迹
- *
- * @param demangle 解构，还原函数
- * @return std::string
- */
 std::string stackTrace(bool demangle) {
   std::string stack;
   const int max_frames = 200;

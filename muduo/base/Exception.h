@@ -1,8 +1,10 @@
 #ifndef BASE_EXCEPTION_H
 #define BASE_EXCEPTION_H
 
+#include "Types.h"
+
 #include <exception>
-#include <string>
+
 
 namespace muduo {
 /**
@@ -11,7 +13,7 @@ namespace muduo {
  */
 class Exception : public std::exception {
 public:
-  Exception(std::string what);
+  Exception(string what);
   ~Exception() noexcept override = default; 
   
   const char *what() const noexcept override
@@ -23,8 +25,8 @@ public:
     return stack_.c_str();
   }
 
-  std::string message_;
-  std::string stack_;
+  string message_;
+  string stack_;
 };
 
 } // namespace muduo

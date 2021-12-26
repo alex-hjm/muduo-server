@@ -1,29 +1,20 @@
 #include "../Exception.h"
 #include <stdio.h>
 
-class Bar
-{
- public:
-  void test()
-  {
-    throw muduo::Exception("oops");
-  }
+class Bar {
+public:
+  void test() { throw muduo::Exception("oops"); }
 };
 
-void foo()
-{
+void foo() {
   Bar b;
   b.test();
 }
 
-int main()
-{
-  try
-  {
+int main() {
+  try {
     foo();
-  }
-  catch (const muduo::Exception& ex)
-  {
+  } catch (const muduo::Exception &ex) {
     printf("reason: %s\n", ex.what());
     printf("stack trace: %s\n", ex.stackTrace());
   }

@@ -62,8 +62,8 @@
 #define NO_THREAD_SAFETY_ANALYSIS                                              \
   THREAD_ANNOTATION_ATTRIBUTE__(no_thread_safety_analysis)
 
-// End of thread safety annotations }
 
+//检查pthread系列函数的返回值，成功返回0
 #ifdef CHECK_PTHREAD_RETURN_VALUE
 
 #ifdef NDEBUG
@@ -111,6 +111,7 @@ public:
   MutexLock() : holder_(0) { MCHECK(pthread_mutex_init(&mutex_, NULL)); }
 
   ~MutexLock() {
+    //销毁mutex时，必须确保已经unlock，否则导致core dump
     assert(holder_ == 0);
     MCHECK(pthread_mutex_destroy(&mutex_));
   }
@@ -165,6 +166,10 @@ public:
 private:
   friend class Condition;
 
+  /**
+   * @brief 利用了RAII技术，构造时清空线程ID，析构时重新记录pid
+   * 
+   */
   class UnassignGuard : noncopyable {
   public:
     explicit UnassignGuard(MutexLock &owner) : owner_(owner) {
@@ -177,12 +182,20 @@ private:
     MutexLock &owner_;
   };
 
+  /**
+   * @brief 解锁时清空线程pid
+   * 
+   */
   void unassignHolder() { holder_ = 0; }
 
+  /**
+   * @brief 记录进行加锁的线程pid
+   * 
+   */
   void assignHolder() { holder_ = CurrentThread::tid(); }
 
-  pthread_mutex_t mutex_;
-  pid_t holder_;
+  pthread_mutex_t mutex_;//实际的mutex句柄
+  pid_t holder_; //占有这把锁的Thread（这里使用的是pid，而不是pthread_t）
 };
 
 // Use as a stack variable, eg.
@@ -191,6 +204,11 @@ private:
 //   MutexLockGuard lock(mutex_);
 //   return data_.size();
 // }
+
+/**
+ * @brief 一个RAII类，实现自动化解锁，防止遗漏解锁
+ * 
+ */
 class SCOPED_CAPABILITY MutexLockGuard : noncopyable {
 public:
   explicit MutexLockGuard(MutexLock &mutex) ACQUIRE(mutex) : mutex_(mutex) {

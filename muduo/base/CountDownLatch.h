@@ -11,12 +11,30 @@ namespace muduo {
  */
 class CountDownLatch : noncopyable {
 public:
+  /**
+   * @brief 倒数几次
+   * 
+   * @param count 
+   */
   explicit CountDownLatch(int count);
 
+  /**
+   * @brief 等待计数值变为0
+   * 
+   */
   void wait();
 
+  /**
+   * @brief 计数减一
+   * 
+   */
   void countDown();
 
+  /**
+   * @brief 获取计数值
+   * 
+   * @return int 
+   */
   int getCount() const;
 
 private:

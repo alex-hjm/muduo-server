@@ -21,11 +21,25 @@ public:
     MCHECK(pthread_cond_wait(&pcond_, mutex_.getPthreadMutex()));
   }
 
-  // returns true if time true, false otherwise;
+  /**
+   * @brief 等待数秒，如果超时退出返回True，否则返回False
+   * 
+   * @param seconds 
+   * @return true 
+   * @return false 
+   */
   bool waitForSeconds(double seconds);
 
+  /**
+   * @brief 通知某个线程
+   * 
+   */
   void notify() { MCHECK(pthread_cond_signal(&pcond_)); }
 
+  /**
+   * @brief 通知所有等待的线程
+   * 
+   */
   void notifyAll() { MCHECK(pthread_cond_broadcast(&pcond_)); }
 
 private:
