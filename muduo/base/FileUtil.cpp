@@ -28,23 +28,22 @@ FileUtil::AppendFile::~AppendFile() { ::fclose(fp_); }
 
 // 不是线程安全的，需要外部加锁
 void FileUtil::AppendFile::append(const char *logline, const size_t len) {
-  size_t n = write(logline, len); // n是已经写了的字节数
-  size_t remain = len - n;        // 相减大于0表示未写完
-  while (remain > 0) // 剩余写入字节数大于0，继续写，直到写完
-  {
-    size_t x = write(logline + n, remain); // 同样x是已经写的
-    if (x == 0) {
+  size_t written = 0;
+
+  while (written != len) {
+    size_t remain = len - written;               // 相减大于0表示未写完
+    size_t n = write(logline + written, remain); // n是已经写了的字节数
+    if (n != remain) {
       int err = ferror(fp_);
       if (err) {
         fprintf(stderr, "AppendFile::append() failed %s\n", strerror_tl(err));
+        break;
       }
-      break;
     }
-    n += x;           // 偏移
-    remain = len - n; // remain -= x
+    written += n;
   }
 
-  writtenBytes_ += len; // 已经写入个数
+  writtenBytes_ += written; // 已经写入个数
 }
 
 void FileUtil::AppendFile::flush() { ::fflush(fp_); }
@@ -86,9 +85,8 @@ int FileUtil::ReadSmallFile::readToString(int maxSize, String *content,
       // fstat函数用来
       // 获取文件（普通文件，目录，管道，socket，字符，块（）的属性
       struct stat statbuf;
-      if (::fstat(fd_, &statbuf) ==
-          0) // fstat用来获取文件大小，保存到缓冲区当中
-      {
+      // fstat用来获取文件大小，保存到缓冲区当中
+      if (::fstat(fd_, &statbuf) == 0) {
         if (S_ISREG(statbuf.st_mode)) {
           // stat结构体中有st_size参数就是文件大小，传给输入参数指针
           *fileSize = statbuf.st_size;

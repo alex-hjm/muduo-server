@@ -17,7 +17,12 @@ add_executable(ThreadPool_test ThreadPool_test.cpp)
 add_executable(Singleton_test Singleton_test.cpp)
 add_executable(ThreadLocal_test ThreadLocal_test.cpp)
 add_executable(ThreadLocalSingleton_test ThreadLocalSingleton_test.cpp)
-
+add_executable(LogStream_bench LogStream_bench.cpp)
+add_executable(Logging_test Logging_test.cpp)
+add_executable(Tprint Tprint.cpp)
+add_executable(Fork_test Fork_test.cpp)
+add_executable(ProcessInfo_test ProcessInfo_test.cpp)
+add_executable(FileUtil_test FileUtil_test.cpp)
 
 target_link_libraries(TimeZone_unittest base)
 target_link_libraries(Timestamp_unittest base)
@@ -32,5 +37,7 @@ target_link_libraries(ThreadPool_test base)
 target_link_libraries(Singleton_test base)
 target_link_libraries(ThreadLocal_test base)
 target_link_libraries(ThreadLocalSingleton_test base)
-
-
+target_link_libraries(LogStream_bench base)
+target_link_libraries(Logging_test base)
+target_link_libraries(ProcessInfo_test base)
+target_link_libraries(FileUtil_test base)
